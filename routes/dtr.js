@@ -13,11 +13,15 @@ const parseYmd = (s) => {
 };
 
 const round2 = (n) => Math.round(n * 100) / 100;
+const toSec  = (hhmmss) => {
+  const [h, m, s] = hhmmss.split(':').map(Number);
+  return h * 3600 + m * 60 + (s || 0);
+};
 
 // Pair IN/OUT punches of one day → { in, out, hours }
-// in_out_remarks: 1 = IN, 0 = OUT (your correction)
+// in_out_remarks: 1 = IN, 0 = OUT
 function pairDay(punches) {
-  // Sort by time ascending (date_time_dtr string sorts fine)
+  // time_dtr is "HH:mm:ss" and sorts correctly as a string
   const sorted = [...punches].sort((a, b) =>
     a.time_dtr.localeCompare(b.time_dtr)
   );
@@ -32,16 +36,10 @@ function pairDay(punches) {
     const outSec = toSec(lastOut);
     if (outSec > inSec) hours = round2((outSec - inSec) / 3600);
   }
-
   return { in: firstIn, out: lastOut, hours };
 }
 
-const toSec = (hhmmss) => {
-  const [h, m, s] = hhmmss.split(':').map(Number);
-  return h * 3600 + m * 60 + (s || 0);
-};
-
-// Build the days array for a [start, end] range
+// Fetch + group + pair a range
 async function buildDays(employee_number, startYmd, endYmd) {
   const [rows] = await pool.query(
     `SELECT date_dtr, time_dtr, in_out_remarks
@@ -52,15 +50,15 @@ async function buildDays(employee_number, startYmd, endYmd) {
     [employee_number, startYmd, endYmd]
   );
 
-  // Group punches by date
   const byDate = new Map();
   for (const p of rows) {
-    const d = String(p.date_dtr).slice(0, 10); // "YYYY-MM-DD"
+    // dateStrings:true makes date_dtr "YYYY-MM-DD" already,
+    // but slice defensively in case it comes back as a full datetime.
+    const d = String(p.date_dtr).slice(0, 10);
     if (!byDate.has(d)) byDate.set(d, []);
     byDate.get(d).push(p);
   }
 
-  // Walk every date in the range so absent days appear too
   const days = [];
   let total = 0;
   const cursor = parseYmd(startYmd);
@@ -95,11 +93,11 @@ router.get('/', async (req, res) => {
     if (mode === 'week') {
       const date = req.query.date || ymd(new Date());
       const ts   = parseYmd(date);
-      const dow  = ts.getDay();                 // 0 = Sun
+      const dow  = ts.getDay();                  // 0 = Sun
       const s    = new Date(ts);
-      s.setDate(ts.getDate() - dow);            // back to Sunday
+      s.setDate(ts.getDate() - dow);             // back to Sunday
       const e    = new Date(s);
-      e.setDate(s.getDate() + 6);               // forward to Saturday
+      e.setDate(s.getDate() + 6);                // forward to Saturday
       startYmd = ymd(s);
       endYmd   = ymd(e);
     } else if (mode === 'month') {
@@ -109,7 +107,7 @@ router.get('/', async (req, res) => {
         return res.status(400).json({ error: 'year and month required for mode=month' });
       }
       startYmd = `${year}-${pad(month)}-01`;
-      endYmd   = ymd(new Date(year, month, 0)); // last day of month
+      endYmd   = ymd(new Date(year, month, 0));  // last day of month
     } else {
       return res.status(400).json({ error: 'mode must be week or month' });
     }
